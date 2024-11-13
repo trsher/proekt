@@ -21,7 +21,7 @@ class PartnerApp(QMainWindow):
         self.db = QSqlDatabase.addDatabase("QSQLITE")
         self.db.setDatabaseName("database.db")
         if not self.db.open():
-            print("Не удалось подключиться к базе данных.")
+            self.show_error_message("Ошибка подключения", "Не удалось подключиться к базе данных.")
             sys.exit(1)
 
         # Основной виджет и макет
@@ -54,7 +54,7 @@ class PartnerApp(QMainWindow):
         
         self.history_button = QPushButton("История")
         self.history_button.setStyleSheet("background-color: transparent; color: white; padding: 10px;")
-        self.history_button.clicked.connect(self.show_history)  # Нужно определить show_history
+        self.history_button.clicked.connect(self.show_history)
         history_layout.addWidget(self.history_button)
         header_layout.addWidget(self.history_widget)
 
@@ -66,7 +66,7 @@ class PartnerApp(QMainWindow):
         # Кнопка "Партнеры"
         self.partners_button = QPushButton("Партнеры")
         self.partners_button.setStyleSheet("background-color: transparent; color: white; padding: 10px;")
-        self.partners_button.clicked.connect(self.show_partner_list)  # Нужно определить show_partner_list
+        self.partners_button.clicked.connect(self.show_partner_list)
 
         # Кнопка "+"
         self.add_button = QPushButton("+")
@@ -85,8 +85,14 @@ class PartnerApp(QMainWindow):
         # Загрузка данных
         self.show_partner_list()
         
-        
-        
+    def show_error_message(self, title, message):
+        msg_box = QMessageBox(self)
+        msg_box.setIcon(QMessageBox.Critical)
+        msg_box.setText(message)
+        msg_box.setWindowTitle(title)
+        msg_box.setStandardButtons(QMessageBox.Ok)
+        msg_box.exec()
+
     def open_add_partner_dialog(self):
         dialog = PartnerDialog(self)
         dialog.setStyleSheet(dialog.get_add_partner_dialog_style())
@@ -147,21 +153,24 @@ class PartnerApp(QMainWindow):
             self.history_table.setItem(rows, 4, QTableWidgetItem(str(sale_date)))
 
     def generate_report(self):
-        c = canvas.Canvas("report.pdf", pagesize=A4)
-        pdfmetrics.registerFont(TTFont("DejaVuSans", "DejaVuSans.ttf"))  # Используем шрифт с поддержкой кириллицы
-        c.setFont("DejaVuSans", 14)
+        try:
+            c = canvas.Canvas("report.pdf", pagesize=A4)
+            pdfmetrics.registerFont(TTFont("DejaVuSans", "DejaVuSans.ttf"))  # Используем шрифт с поддержкой кириллицы
+            c.setFont("DejaVuSans", 14)
 
-        c.drawString(200, 800, "Отчет по продажам")
-        y = 750
-        c.setFont("DejaVuSans", 9)
-        i = 1
-        for row in range(self.history_table.rowCount()):
-            row_data = [self.history_table.item(row, col).text() for col in range(5)]
-            c.drawString(10,y,f"{i})")
-            c.drawString(20, y, " | ".join(row_data))
-            y -= 20
-            i+=1
-        c.save()
+            c.drawString(200, 800, "Отчет по продажам")
+            y = 750
+            c.setFont("DejaVuSans", 9)
+            i = 1
+            for row in range(self.history_table.rowCount()):
+                row_data = [self.history_table.item(row, col).text() for col in range(5)]
+                c.drawString(10, y, f"{i})")
+                c.drawString(20, y, " | ".join(row_data))
+                y -= 20
+                i += 1
+            c.save()
+        except Exception as e:
+            self.show_error_message("Ошибка генерации отчета", f"Не удалось создать отчет. Ошибка: {str(e)}")
 
     def show_partner_list(self):
         # Очистка основной области
@@ -235,7 +244,6 @@ class PartnerApp(QMainWindow):
                 # Обновление ссылки на текущую выбранную карточку
                 self.selected_card = card
             
-
             # Присваиваем обработчики событиям клика
             partner_card.mousePressEvent = on_single_click  # Одинарный клик изменяет цвет
             partner_card.mouseDoubleClickEvent = lambda event, pid=partner_id, pt=partner_type, pn=partner_name, dn=director_name, ph=phone, rt=rating: self.open_edit_partner_dialog(pid, pt, pn, dn, ph, rt)
@@ -273,12 +281,29 @@ class PartnerApp(QMainWindow):
 
             # Добавление карточки в общий список
             self.partner_list_layout.addWidget(partner_card)
+
+    def delete_partner(self):
+        if self.partner_id is not None:
+            query = QSqlQuery()
+            query.prepare("DELETE FROM Partners WHERE partner_id = ?")
+            query.addBindValue(self.partner_id)
+            try:
+                if not query.exec():
+                    raise Exception(query.lastError().text())
+                # Обнуляем выбранную карточку после удаления
+                if self.selected_card:
+                    self.selected_card = None
+            except Exception as e:
+                self.show_error_message("Ошибка удаления", f"Не удалось удалить партнера. Ошибка: {str(e)}")
+        self.load_partners()  # Обновляем список партнеров после удаления
+
+
     
     def open_edit_partner_dialog(self, partner_id, partner_type, partner_name, director_name, phone, rating):
         dialog = PartnerDialog(self, partner_id, partner_type, partner_name, director_name, phone, rating)
         dialog.setStyleSheet(dialog.get_edit_partner_dialog_style())
         dialog.exec()
-        self.load_partners()
+        self.load_partners()  # Обновляем список партнеров после редактирования
 
     def calculate_material(self, coefficient, defect_rate, product_quantity, param1, param2):
         required_material = product_quantity * param1 * param2 * coefficient
@@ -442,18 +467,32 @@ class PartnerDialog(QDialog):
             query.addBindValue(self.partner_id)
 
         # Выполнение запроса
-        if not query.exec():
-            self.show_error_message("Ошибка сохранения", f"Не удалось сохранить партнера. Ошибка: {query.lastError().text()}")
-        else:
+        try:
+            if not query.exec():
+                raise Exception(query.lastError().text())
             self.accept()
+        except Exception as e:
+            self.show_error_message("Ошибка сохранения", f"Не удалось сохранить партнера. Ошибка: {str(e)}")
 
     def delete_partner(self):
         if self.partner_id is not None:
             query = QSqlQuery()
             query.prepare("DELETE FROM Partners WHERE partner_id = ?")
             query.addBindValue(self.partner_id)
-            query.exec()
+            try:
+                if not query.exec():
+                    raise Exception(query.lastError().text())
+            except Exception as e:
+                self.show_error_message("Ошибка удаления", f"Не удалось удалить партнера. Ошибка: {str(e)}")
         self.accept()
+
+    def show_error_message(self, title, message):
+        msg_box = QMessageBox(self)
+        msg_box.setIcon(QMessageBox.Critical)
+        msg_box.setText(message)
+        msg_box.setWindowTitle(title)
+        msg_box.setStandardButtons(QMessageBox.Ok)
+        msg_box.exec()
 
 
 # Создание приложения
@@ -461,3 +500,5 @@ app = QApplication(sys.argv)
 window = PartnerApp()
 window.show()
 sys.exit(app.exec())
+
+
